@@ -1,0 +1,7 @@
+-f https://download.pytorch.org/whl/cu121
+torch>=2.1.0+ # For compile() in python 3.11
+numpy
+tqdm
+pandas
+nltk
+requests
