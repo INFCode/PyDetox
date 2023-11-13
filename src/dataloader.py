@@ -1,12 +1,9 @@
 from dataclasses import dataclass
 from random import Random
-from re import L
-from typing import Callable, Dict, Optional, Generator, Union, List
+from typing import Callable, Dict, Optional, Union, List
 from datasets import (
     Dataset,
     DatasetDict,
-    IterableDataset,
-    IterableDatasetDict,
     load_dataset,
 )
 
@@ -187,6 +184,13 @@ def jigsaw_dataloader(
 ) -> DataLoaderGroup:
     path = relative_to_project_root("data/jigsaw")
     dataset = load_dataset("jigsaw_toxicity_pred", data_dir=str(path))
+    # dataset_train = load_dataset(
+    #    "jigsaw_toxicity_pred", data_dir=str(path), split="train[:100]"
+    # )
+    # dataset_test = load_dataset(
+    #    "jigsaw_toxicity_pred", data_dir=str(path), split="test[:20]"
+    # )
+    # dataset = DatasetDict({"train": dataset_train, "test": dataset_test})
     assert isinstance(dataset, DatasetDict)
     print(dataset.keys())
 
@@ -214,7 +218,7 @@ def jigsaw_dataloader(
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
     # tokenized_dataset.set_format("torch")
 
-    accepted_keys = ["input_ids", "attention_mask", "labels"]
+    accepted_keys = ["input_ids", "attention_mask", "tags"]
     for key in tokenized_dataset["train"].features.keys():
         if key not in accepted_keys:
             tokenized_dataset = tokenized_dataset.remove_columns(key)
@@ -228,7 +232,7 @@ def jigsaw_dataloader(
         }
     )
 
-    collator = DataCollatorForParaDetox(tokenizer, device)
+    collator = DataCollatorForJigsaw(tokenizer, device)
     return DataLoaderGroup(splitted_dataset, collator, 2)
 
 
@@ -236,6 +240,18 @@ if __name__ == "__main__":
     tokenizer = BartTokenizer.from_pretrained("facebook/bart-large")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dlg = jigsaw_dataloader(tokenizer, device)
-    print(f"Train:\t{len(dlg.train)}")
-    print(f"Test:\t{len(dlg.test)}")
-    print(f"Validation:\t{len(dlg.validation)}")
+    print(f"Train split size:\t\t{len(dlg.train)}")
+    print(f"Test split size:\t\t{len(dlg.test)}")
+    print(f"Validation split size:\t{len(dlg.validation)}")
+
+    for batch in dlg.test:
+        decoded_input = tokenizer.decode(
+            batch["input_ids"][0], skip_special_tokens=True
+        )
+        print(decoded_input)
+        if "labels" in batch.keys():
+            decoded_label = tokenizer.decode(
+                batch["labels"][0], skip_special_tokens=True
+            )
+            print(decoded_label)
+        break
