@@ -1,200 +1,241 @@
-from collections import Counter, defaultdict
-from typing import DefaultDict, List, Tuple
-import logging as lg
-import os
-from pathlib import Path
-import requests
+from dataclasses import dataclass
+from random import Random
+from re import L
+from typing import Callable, Dict, Optional, Generator, Union, List
+from datasets import (
+    Dataset,
+    DatasetDict,
+    IterableDataset,
+    IterableDatasetDict,
+    load_dataset,
+)
 
+import csv
 import torch
-from torch.utils.data import DataLoader, Dataset
-import pandas as pd
-from nltk import TreebankWordTokenizer
-from tqdm import tqdm
+from torch.utils.data import DataLoader
+
+from transformers.tokenization_utils_base import (
+    PreTrainedTokenizerBase,
+    PaddingStrategy,
+)
+from transformers import BartTokenizer
+from pathlib import Path
+
+from util import flatten, unflatten, relative_to_project_root
 
 
-class ParaDetoxDataset(Dataset):
-    _X: List[List[int]]
-    _Y: List[List[int]]
+class DataLoaderGroup:
+    train: DataLoader
+    test: DataLoader
+    validation: DataLoader
 
-    def __init__(self, X: List[List[int]], Y: List[List[int]]):
-        assert len(X) == len(
-            Y
-        ), f"Data and labels should have same length, but {len(X)} vs {len(Y)} received."
-
-        super().__init__()
-
-        self._X = X
-        self._Y = Y
-
-    def __len__(self) -> int:
-        return len(self._X)
-
-    def __getitem__(self, index):
-        return self._X[index], self._Y[index]
-
-
-class Vocabulary:
-    pad_token: str = "<TOK_PAD>"
-    start_token: str = "<TOK_SOS>"
-    end_token: str = "<TOK_EOS>"
-    unknown_token: str = "<TOK_UNK>"
-    special_tokens: List[str] = [pad_token, start_token, end_token, unknown_token]
-
-    _vocab: List[str]
-    _index: DefaultDict[str, int]
-
-    def __init__(self, tokens: List[str], unknown_threshold: int = 3) -> None:
-        word_freq = dict(Counter(tokens))
-        self._vocab = self.special_tokens + [
-            k for k, v in word_freq.items() if v >= unknown_threshold
-        ]
-        self._index = defaultdict(
-            lambda: self._vocab.index(self.unknown_token),  # default to unknown
-            zip(self._vocab, range(len(self._vocab))),
+    def __init__(
+        self, datasets: DatasetDict, collator: Callable, batch_size: int
+    ) -> None:
+        self.train = DataLoader(
+            datasets["train"],  # type: ignore
+            collate_fn=collator,
+            # shuffle=True,
+            batch_size=batch_size,
+        )
+        self.validation = DataLoader(
+            datasets["validation"],  # type: ignore
+            collate_fn=collator,
+            batch_size=batch_size,
+        )
+        self.test = DataLoader(
+            datasets["test"],  # type: ignore
+            collate_fn=collator,
+            batch_size=batch_size,
         )
 
-    def __len__(self) -> int:
-        return len(self._vocab)
 
-    def tok2idx(self, token: str) -> int:
-        return self._index[token]
+def paradetox_tsv_reader(file_path: Path | str) -> Dict[str, List]:
+    with open(file_path, "r", encoding="utf-8") as file:
+        # Initialize the CSV reader with tab delimiter
+        reader = csv.reader(file, delimiter="\t")
+        # Skip the header row
+        next(reader, None)
+        result = {"input": [], "outputs": []}
+        for row in reader:
+            result["input"].append(row[0])
+            result["outputs"].append([output for output in row[1:] if output])
 
-    def idx2tok(self, index: int) -> str:
-        return self._vocab[index]
-
-    def encode_sents(self, sentences: List[List[str]]):
-        return [[self.tok2idx(word) for word in sentence] for sentence in sentences]
-
-    def decode_sents(self, sentences: List[List[int]]):
-        return [[self.idx2tok(idx) for idx in sentence] for sentence in sentences]
-
-
-def preprocess_dataset(path_to_dataset: str) -> Tuple[DataLoader, Vocabulary]:
-    path = _prepare_path(path_to_dataset)
-
-    lg.info("Loading dataset")
-    toxic, neutral = _load_dataset(path)
-
-    lg.info("Tokenizing dataset")
-    tokenizer = TreebankWordTokenizer()
-    toxic_tokens = tokenizer.tokenize_sents(toxic)
-    neutral_tokens = tokenizer.tokenize_sents(neutral)
-
-    flatten_tokens = [t for sentence in toxic_tokens + neutral_tokens for t in sentence]
-    lg.info("Building vocabulary")
-    vocab = Vocabulary(flatten_tokens, unknown_threshold=2)
-
-    lg.info("Encoding dataset")
-    X = vocab.encode_sents(toxic_tokens)
-    Y = vocab.encode_sents(neutral_tokens)
-
-    lg.info("Building dataloader")
-    dataloader = _make_dataloader(X, Y, vocab)
-
-    return dataloader, vocab
+    return result
 
 
-def _load_dataset(path: Path) -> Tuple[List[str], List[str]]:
-    df = pd.read_csv(path, delimiter="\t", header=0)
-    lg.debug(f"{df.head()=}")
-
-    toxic_col = "toxic"
-    neutral_col = [f"neutral{i}" for i in range(1, 4)]
-
-    toxic = []
-    neutral = []
-
-    for _, row in tqdm(df.iterrows()):
-        toxic_sentence = row[toxic_col]
-        neutral_sentences = row[neutral_col]
-        neutral_sentences = neutral_sentences[neutral_sentences.notna()].tolist()
-        for n in neutral_sentences:
-            toxic.append(toxic_sentence)
-            neutral.append(n)
-
-    return toxic, neutral
+def load_paradetox_dataset() -> Dataset:
+    path = relative_to_project_root("data/paradetox/paradetox.tsv")
+    return Dataset.from_dict(paradetox_tsv_reader(path))
 
 
-def _make_dataloader(
-    X: List[List[int]], Y: List[List[int]], vocab: Vocabulary
-) -> DataLoader:
-    dataset = ParaDetoxDataset(X, Y)
-    pad_token_index = vocab.tok2idx(vocab.pad_token)
+@dataclass
+class DataCollatorForParaDetox:
+    tokenizer: PreTrainedTokenizerBase
+    device: torch.device
+    seed: int = 42
+    generator: Random = Random(seed)
+    padding: Union[bool, str, PaddingStrategy] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
 
-    # define a collate function that pads the batch to the longest one
-    def collate_fn(samples: List[Tuple[List[int], List[int]]]):
-        lengths = [(len(s[0]), len(s[1])) for s in samples]
-        lengths_X, lengths_Y = list(zip(*lengths))  # unzips into 2 lists
-        longest_X, longest_Y = max(lengths_X), max(lengths_Y)
-        batch_size = len(samples)
+    def __call__(self, features):
+        sampled_features = []
+        sampled_labels = []
+        for f in features:
+            sample_idx = self.generator.randint(0, len(f["labels"]) - 1)
+            # process labels seperately (see https://github.com/huggingface/transformers/issues/20182)
+            sampled_features.append(
+                {k: v[sample_idx] for k, v in f.items() if k != "labels"}
+            )
+            sampled_labels.append(f["labels"][sample_idx])
 
-        # dtype have to be int as expected by the embedding layer
-        padded_X = (
-            torch.ones((batch_size, longest_X), dtype=torch.int32) * pad_token_index
+        # Apply Padding
+        padded_inputs = self.tokenizer.pad(
+            sampled_features,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors="pt",
         )
-        padded_Y = (
-            torch.ones((batch_size, longest_Y), dtype=torch.int32) * pad_token_index
+        padded_labels = self.tokenizer.pad(
+            {"input_ids": sampled_labels},
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_attention_mask=False,  # No attention mask for labels
+            return_tensors="pt",
+        )
+        padded_inputs["labels"] = padded_labels["input_ids"]
+
+        return padded_inputs
+
+
+def paradetox_dataloader(
+    tokenizer: PreTrainedTokenizerBase, device: torch.device
+) -> DataLoaderGroup:
+    dataset = load_paradetox_dataset()
+
+    def tokenize_function(examples: Dict[str, List]):
+        # Repeat each first sentence four times to go with the four possibilities of second sentences.
+        inputs: List[str] = examples["input"]
+        outputs: List[List[str]] = examples["outputs"]
+        inputs_duplicated = [i for i, o in zip(inputs, outputs) for _ in o]
+
+        # Flatten
+        outputs_flatten, partition = flatten(outputs)
+        assert len(inputs_duplicated) == len(
+            outputs_flatten
+        ), f"{len(inputs_duplicated)} vs. {len(outputs_flatten)}"
+
+        # Tokenize
+        tokenized = tokenizer(
+            inputs_duplicated, text_target=outputs_flatten, truncation=True
         )
 
-        # copy over the actual sequences
-        for i in range(batch_size):
-            x, y = samples[i]
-            x_l, y_l = lengths[i]
-            padded_X[i, :x_l] = torch.as_tensor(x)
-            padded_Y[i, :y_l] = torch.as_tensor(y)
+        # unflatten
+        result = {k: unflatten(v, partition) for k, v in tokenized.items()}
 
-        return padded_X, padded_Y, lengths_X, lengths_Y
+        for i in result["input_ids"]:
+            assert len(i) != 0
+        return result
 
-    dataloader = DataLoader(dataset, collate_fn=collate_fn)
-    return dataloader
-
-
-def _prepare_path(path_to_dataset: str) -> Path:
-    path = Path(path_to_dataset)
-    if path_to_dataset[-1] == "/":
-        path = path / "paradetox.tsv"
-
-    lg.info("Looking at data path {str(path)}.")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    if not path.exists():
-        # file not downloaded yet
-        lg.info("Dataset not found in given path. Download from GitHub.")
-        _download_dataset(path)
-
-    return path
-
-
-def _download_dataset(path: Path):
-    # Define the URL of the file you want to download
-    url = (
-        "https://raw.githubusercontent.com/s-nlp/paradetox/main/paradetox/paradetox.tsv"
+    tokenized_dataset = dataset.map(
+        tokenize_function, batched=True, remove_columns=dataset.column_names
+    )
+    # tokenized_dataset.set_format("torch")
+    train_test = tokenized_dataset.train_test_split(test_size=0.12)
+    test_validation = train_test["test"].train_test_split(test_size=0.8)
+    splitted_dataset = DatasetDict(
+        {
+            "train": train_test["train"],
+            "validation": test_validation["train"],
+            "test": test_validation["test"],
+        }
     )
 
-    # Create parent folders if they don't exist
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    collator = DataCollatorForParaDetox(tokenizer, device)
+    return DataLoaderGroup(splitted_dataset, collator, 2)
 
-    # Download the file
-    response = requests.get(url, timeout=1000)
 
-    if response.status_code == 200:
-        with open(path, "wb") as file:
-            file.write(response.content)
-        lg.info(f"File downloaded successfully to {path}")
-    else:
-        lg.warning(f"Failed to download the file. Status code: {response.status_code}")
+@dataclass
+class DataCollatorForJigsaw:
+    tokenizer: PreTrainedTokenizerBase
+    device: torch.device
+    padding: Union[bool, str, PaddingStrategy] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+
+    def __call__(self, features):
+        tags = [feature.pop("tags") for feature in features]
+
+        # Apply Padding
+        padded_inputs = self.tokenizer.pad(
+            features,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors="pt",
+        )
+        padded_inputs["tags"] = torch.tensor(tags).to(device=self.device)
+
+        return padded_inputs
+
+
+def jigsaw_dataloader(
+    tokenizer: PreTrainedTokenizerBase, device: torch.device
+) -> DataLoaderGroup:
+    path = relative_to_project_root("data/jigsaw")
+    dataset = load_dataset("jigsaw_toxicity_pred", data_dir=str(path))
+    assert isinstance(dataset, DatasetDict)
+    print(dataset.keys())
+
+    def tokenize_function(examples: Dict[str, List]):
+        # Repeat each first sentence four times to go with the four possibilities of second sentences.
+        inputs: List[str] = examples["comment_text"]
+        tag_names = [
+            "toxic",
+            "severe_toxic",
+            "obscene",
+            "threat",
+            "insult",
+            "identity_hate",
+        ]
+        length = len(inputs)
+        tags = [[examples[name][i] for name in tag_names] for i in range(length)]
+
+        # Tokenize
+        tokenized = tokenizer(inputs, truncation=True)
+
+        result = dict(tokenized.items())
+        result["tags"] = tags
+        return result
+
+    tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    # tokenized_dataset.set_format("torch")
+
+    accepted_keys = ["input_ids", "attention_mask", "labels"]
+    for key in tokenized_dataset["train"].features.keys():
+        if key not in accepted_keys:
+            tokenized_dataset = tokenized_dataset.remove_columns(key)
+
+    test_validation = tokenized_dataset["test"].train_test_split(test_size=0.8)
+    splitted_dataset = DatasetDict(
+        {
+            "train": tokenized_dataset["train"],
+            "validation": test_validation["train"],
+            "test": test_validation["test"],
+        }
+    )
+
+    collator = DataCollatorForParaDetox(tokenizer, device)
+    return DataLoaderGroup(splitted_dataset, collator, 2)
 
 
 if __name__ == "__main__":
-    lg.basicConfig(level=lg.DEBUG)
-    dl, vocab = preprocess_dataset("./data/")
-
-    for i in range(20):
-        print(f"{vocab.idx2tok(i)}", end=" ")
-    print()
-
-    for i, o, il, ol in dl:
-        print(f"{i}")
-        print(f"{vocab.decode_sents(i)}")
-        break
+    tokenizer = BartTokenizer.from_pretrained("facebook/bart-large")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    dlg = jigsaw_dataloader(tokenizer, device)
+    print(f"Train:\t{len(dlg.train)}")
+    print(f"Test:\t{len(dlg.test)}")
+    print(f"Validation:\t{len(dlg.validation)}")

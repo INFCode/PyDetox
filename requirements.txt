@@ -1,7 +1,13 @@
--f https://download.pytorch.org/whl/cu121
-torch>=2.1.0+ # For compile() in python 3.11
+# Please install PyTorch manually to select suitable backend
+# It is required to use torch>=2.1.0+ For compile() support
+# in python 3.11
 numpy
 tqdm
 pandas
 nltk
 requests
+
+# huggingface libraries
+datasets
+transformers
+evaluate
