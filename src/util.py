@@ -42,7 +42,7 @@ def find_project_root(current_path: Optional[Path | str] = None) -> Path:
 
 
 def relative_to_project_root(
-    relative_path: str, current_path: Optional[Path | str] = None
+    relative_path: Path | str, current_path: Optional[Path | str] = None
 ) -> Path:
     """
     Returns the absolute path to a file given its relative path from the project root.

@@ -1,13 +1,14 @@
 from dataclasses import dataclass
 from random import Random
 from typing import Callable, Dict, Optional, Union, List
+from pathlib import Path
+import csv
 from datasets import (
     Dataset,
     DatasetDict,
     load_dataset,
 )
 
-import csv
 import torch
 from torch.utils.data import DataLoader
 
@@ -15,8 +16,7 @@ from transformers.tokenization_utils_base import (
     PreTrainedTokenizerBase,
     PaddingStrategy,
 )
-from transformers import BartTokenizer
-from pathlib import Path
+from transformers import AutoTokenizer
 
 from util import flatten, unflatten, relative_to_project_root
 
@@ -47,6 +47,48 @@ class DataLoaderGroup:
         )
 
 
+@dataclass
+class DataLoaderConfig:
+    batch_size: int
+    tokenizer_source: str
+    train_weight: int = 90
+    test_weight: int = 8
+    validation_weight: int = 2
+    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    path: Optional[str | Path] = None
+
+    def split_dataset(
+        self,
+        train: Dataset,
+        test: Optional[Dataset] = None,
+        validation: Optional[Dataset] = None,
+    ) -> DatasetDict:
+        if test is None:
+            train_vs_test_val = self.train_weight / (
+                self.train_weight + self.test_weight + self.validation_weight
+            )
+            train_test = train.train_test_split(test_size=train_vs_test_val)
+            train = train_test["train"]
+            test = train_test["test"]
+        if validation is None:
+            test_vs_val = self.test_weight / (self.test_weight + self.validation_weight)
+            test_validation = test.train_test_split(test_size=test_vs_val)
+            test = test_validation["test"]
+            validation = test_validation["train"]
+
+        splitted_dataset = DatasetDict(
+            {
+                "train": train,
+                "validation": validation,
+                "test": test,
+            }
+        )
+        return splitted_dataset
+
+    def get_tokenizer(self):
+        return AutoTokenizer.from_pretrained(self.tokenizer_source)
+
+
 def paradetox_tsv_reader(file_path: Path | str) -> Dict[str, List]:
     with open(file_path, "r", encoding="utf-8") as file:
         # Initialize the CSV reader with tab delimiter
@@ -61,8 +103,8 @@ def paradetox_tsv_reader(file_path: Path | str) -> Dict[str, List]:
     return result
 
 
-def load_paradetox_dataset() -> Dataset:
-    path = relative_to_project_root("data/paradetox/paradetox.tsv")
+def load_paradetox_dataset(path: Optional[Path | str]) -> Dataset:
+    path = path or relative_to_project_root("data/paradetox/paradetox.tsv")
     return Dataset.from_dict(paradetox_tsv_reader(path))
 
 
@@ -108,10 +150,9 @@ class DataCollatorForParaDetox:
         return padded_inputs
 
 
-def paradetox_dataloader(
-    tokenizer: PreTrainedTokenizerBase, device: torch.device
-) -> DataLoaderGroup:
-    dataset = load_paradetox_dataset()
+def paradetox_dataloader(cfg: DataLoaderConfig) -> DataLoaderGroup:
+    tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer_source)
+    dataset = load_paradetox_dataset(cfg.path)
 
     def tokenize_function(examples: Dict[str, List]):
         # Repeat each first sentence four times to go with the four possibilities of second sentences.
@@ -141,18 +182,10 @@ def paradetox_dataloader(
         tokenize_function, batched=True, remove_columns=dataset.column_names
     )
     # tokenized_dataset.set_format("torch")
-    train_test = tokenized_dataset.train_test_split(test_size=0.12)
-    test_validation = train_test["test"].train_test_split(test_size=0.8)
-    splitted_dataset = DatasetDict(
-        {
-            "train": train_test["train"],
-            "validation": test_validation["train"],
-            "test": test_validation["test"],
-        }
-    )
+    splitted_dataset = cfg.split_dataset(tokenized_dataset)
 
-    collator = DataCollatorForParaDetox(tokenizer, device)
-    return DataLoaderGroup(splitted_dataset, collator, 2)
+    collator = DataCollatorForParaDetox(tokenizer, cfg.device)
+    return DataLoaderGroup(splitted_dataset, collator, cfg.batch_size)
 
 
 @dataclass
@@ -179,10 +212,9 @@ class DataCollatorForJigsaw:
         return padded_inputs
 
 
-def jigsaw_dataloader(
-    tokenizer: PreTrainedTokenizerBase, device: torch.device
-) -> DataLoaderGroup:
-    path = relative_to_project_root("data/jigsaw")
+def jigsaw_dataloader(cfg: DataLoaderConfig) -> DataLoaderGroup:
+    tokenizer = cfg.get_tokenizer()
+    path = cfg.path or relative_to_project_root("data/jigsaw")
     dataset = load_dataset("jigsaw_toxicity_pred", data_dir=str(path))
     # dataset_train = load_dataset(
     #    "jigsaw_toxicity_pred", data_dir=str(path), split="train[:100]"
@@ -223,28 +255,23 @@ def jigsaw_dataloader(
         if key not in accepted_keys:
             tokenized_dataset = tokenized_dataset.remove_columns(key)
 
-    test_validation = tokenized_dataset["test"].train_test_split(test_size=0.8)
-    splitted_dataset = DatasetDict(
-        {
-            "train": tokenized_dataset["train"],
-            "validation": test_validation["train"],
-            "test": test_validation["test"],
-        }
+    splitted_dataset = cfg.split_dataset(
+        tokenized_dataset["train"], tokenized_dataset["test"]
     )
 
-    collator = DataCollatorForJigsaw(tokenizer, device)
-    return DataLoaderGroup(splitted_dataset, collator, 2)
+    collator = DataCollatorForJigsaw(tokenizer, cfg.device)
+    return DataLoaderGroup(splitted_dataset, collator, cfg.batch_size)
 
 
 if __name__ == "__main__":
-    tokenizer = BartTokenizer.from_pretrained("facebook/bart-large")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dlg = jigsaw_dataloader(tokenizer, device)
+    cfg = DataLoaderConfig(batch_size=8, tokenizer_source="facebook/bart-large")
+    dlg = jigsaw_dataloader(cfg)
     print(f"Train split size:\t\t{len(dlg.train)}")
     print(f"Test split size:\t\t{len(dlg.test)}")
     print(f"Validation split size:\t{len(dlg.validation)}")
 
-    for batch in dlg.test:
+    tokenizer = cfg.get_tokenizer()
+    for batch in dlg.train:
         decoded_input = tokenizer.decode(
             batch["input_ids"][0], skip_special_tokens=True
         )
