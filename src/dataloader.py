@@ -19,6 +19,8 @@ from transformers.tokenization_utils_base import (
 from transformers import AutoTokenizer
 
 from util import flatten, unflatten, relative_to_project_root
+import random
+import numpy as np
 
 
 class DataLoaderGroup:
@@ -29,21 +31,30 @@ class DataLoaderGroup:
     def __init__(
         self, datasets: DatasetDict, collator: Callable, batch_size: int
     ) -> None:
+        def seed_init_fn(x):
+            seed = 42 + x
+            np.random.seed(seed)
+            random.seed(seed)
+            torch.manual_seed(seed)
+
         self.train = DataLoader(
             datasets["train"],  # type: ignore
             collate_fn=collator,
-            # shuffle=True,
+            shuffle=True,
             batch_size=batch_size,
+            worker_init_fn=seed_init_fn,
         )
         self.validation = DataLoader(
             datasets["validation"],  # type: ignore
             collate_fn=collator,
             batch_size=batch_size,
+            worker_init_fn=seed_init_fn,
         )
         self.test = DataLoader(
             datasets["test"],  # type: ignore
             collate_fn=collator,
             batch_size=batch_size,
+            worker_init_fn=seed_init_fn,
         )
 
 
