@@ -11,3 +11,4 @@ requests
 datasets
 transformers
 evaluate
+scikit-learn

@@ -158,6 +158,10 @@ class DataCollatorForParaDetox:
         )
         padded_inputs["labels"] = padded_labels["input_ids"]
 
+        for k, v in padded_inputs.items():
+            if isinstance(v, torch.Tensor):
+                padded_inputs[k] = v.to(device=self.device)
+
         return padded_inputs
 
 
@@ -220,6 +224,10 @@ class DataCollatorForJigsaw:
         )
         padded_inputs["tags"] = torch.tensor(tags).to(device=self.device)
 
+        for k, v in padded_inputs.items():
+            if isinstance(v, torch.Tensor):
+                padded_inputs[k] = v.to(device=self.device)
+
         return padded_inputs
 
 
@@ -227,13 +235,6 @@ def jigsaw_dataloader(cfg: DataLoaderConfig) -> DataLoaderGroup:
     tokenizer = cfg.get_tokenizer()
     path = cfg.path or relative_to_project_root("data/jigsaw")
     dataset = load_dataset("jigsaw_toxicity_pred", data_dir=str(path))
-    # dataset_train = load_dataset(
-    #    "jigsaw_toxicity_pred", data_dir=str(path), split="train[:100]"
-    # )
-    # dataset_test = load_dataset(
-    #    "jigsaw_toxicity_pred", data_dir=str(path), split="test[:20]"
-    # )
-    # dataset = DatasetDict({"train": dataset_train, "test": dataset_test})
     assert isinstance(dataset, DatasetDict)
     print(dataset.keys())
 

@@ -1,6 +1,10 @@
 from itertools import accumulate, tee, chain
 from typing import List, Optional, Tuple, TypeVar
 from pathlib import Path
+import functools
+from copy import deepcopy
+
+DEBUG = True
 
 T = TypeVar("T")
 
@@ -63,3 +67,22 @@ def relative_to_project_root(
 
     # Return the full path, making sure to resolve it to an absolute path
     return full_path.resolve()
+
+
+def lru_cache(maxsize=128, typed=False, copy=False):
+    """
+    a simple wrapper of functools.lru_cache, to support deep copy
+    """
+    if not copy:
+        return functools.lru_cache(maxsize, typed)
+
+    def decorator(f):
+        cached_func = functools.lru_cache(maxsize, typed)(f)
+
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            return deepcopy(cached_func(*args, **kwargs))
+
+        return wrapper
+
+    return decorator
