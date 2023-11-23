@@ -12,3 +12,6 @@ datasets
 transformers
 evaluate
 scikit-learn
+
+# paradetox dependencies
+-r src/evaluation_detox/requirements.txt
