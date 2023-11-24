@@ -1,7 +1,9 @@
 # Please install PyTorch manually to select suitable backend
 # It is required to use torch>=2.1.0+ For compile() support
 # in python 3.11
-numpy
+numpy==1.19.3 # fairseq 0.10 uses np.float, which is deprecated in numpy 1.20
+			  # and numpy <= 1.19.2 needs cython<3 but missing upper bounds,
+			  # see https://github.com/numpy/numpy/issues/24330
 tqdm
 pandas
 nltk

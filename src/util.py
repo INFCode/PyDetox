@@ -1,5 +1,5 @@
 from itertools import accumulate, tee, chain
-from typing import List, Optional, Tuple, TypeVar
+from typing import List, Optional, Tuple, TypeVar, Union
 from pathlib import Path
 import functools
 from copy import deepcopy
@@ -21,7 +21,7 @@ def unflatten(lst: List[T], partition: List[Tuple[int, int]]) -> List[List[T]]:
     return [lst[a:b] for a, b in partition]
 
 
-def find_project_root(current_path: Optional[Path | str] = None) -> Path:
+def find_project_root(current_path: Optional[Union[Path, str]] = None) -> Path:
     """
     Finds the project's root directory by looking for a directory that contains
     a .git folder, a requirements.txt, or a LICENSE file.
@@ -46,7 +46,7 @@ def find_project_root(current_path: Optional[Path | str] = None) -> Path:
 
 
 def relative_to_project_root(
-    relative_path: Path | str, current_path: Optional[Path | str] = None
+    relative_path: Union[Path, str], current_path: Optional[Union[Path, str]] = None
 ) -> Path:
     """
     Returns the absolute path to a file given its relative path from the project root.

@@ -1,5 +1,5 @@
 python-box
 flair
-fairseq
+fairseq==0.10.0 # see issue https://github.com/s-nlp/paradetox/issues/3#issuecomment-1545918422
 sentencepiece
 sacremoses

@@ -66,7 +66,7 @@ class DataLoaderConfig:
     test_weight: int = 8
     validation_weight: int = 2
     device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    path: Optional[str | Path] = None
+    path: Optional[Union[str, Path]] = None
 
     def split_dataset(
         self,
@@ -100,7 +100,7 @@ class DataLoaderConfig:
         return AutoTokenizer.from_pretrained(self.tokenizer_source)
 
 
-def paradetox_tsv_reader(file_path: Path | str) -> Dict[str, List]:
+def paradetox_tsv_reader(file_path: Union[Path, str]) -> Dict[str, List]:
     with open(file_path, "r", encoding="utf-8") as file:
         # Initialize the CSV reader with tab delimiter
         reader = csv.reader(file, delimiter="\t")
@@ -114,7 +114,7 @@ def paradetox_tsv_reader(file_path: Path | str) -> Dict[str, List]:
     return result
 
 
-def load_paradetox_dataset(path: Optional[Path | str]) -> Dataset:
+def load_paradetox_dataset(path: Optional[Union[Path, str]]) -> Dataset:
     path = path or relative_to_project_root("data/paradetox/paradetox.tsv")
     return Dataset.from_dict(paradetox_tsv_reader(path))
 
