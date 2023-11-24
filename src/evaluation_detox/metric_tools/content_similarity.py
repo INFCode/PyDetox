@@ -8,21 +8,23 @@ from flair.embeddings import FlairEmbeddings
 from torch.nn.functional import cosine_similarity
 
 try:
-  import google.colab
-  IN_COLAB = True
-except:
-  IN_COLAB = False
+    import google.colab
 
-if IN_COLAB:
-    from ..wieting_similarity import SimilarityEvaluator
-else:
-    from wieting_similarity import SimilarityEvaluator
+    IN_COLAB = True
+except:
+    IN_COLAB = False
+
+# if IN_COLAB:
+#    from ..wieting_similarity import SimilarityEvaluator
+# else:
+#    from wieting_similarity import SimilarityEvaluator
+from ..wieting_similarity import SimilarityEvaluator
 
 
 def calc_bleu(inputs, preds):
     bleu_sim = 0
     counter = 0
-    print('Calculating BLEU similarity')
+    print("Calculating BLEU similarity")
     for i in range(len(inputs)):
         if len(inputs[i]) > 3 and len(preds[i]) > 3:
             bleu_sim += sentence_bleu([inputs[i]], preds[i])
@@ -32,23 +34,23 @@ def calc_bleu(inputs, preds):
 
 
 def flair_sim(args, inputs, preds):
-    print('Calculating flair embeddings similarity')
+    print("Calculating flair embeddings similarity")
     sim = 0
     batch_size = args.batch_size
     inp_embed = []
     pred_embed = []
 
-    embedder = FlairEmbeddings('news-forward')
+    embedder = FlairEmbeddings("news-forward")
 
     for i in range(0, len(inputs), batch_size):
-        inp_part = [Sentence(sent) for sent in inputs[i:i + batch_size]]
-        pred_part = [Sentence(sent) for sent in preds[i:i + batch_size]]
+        inp_part = [Sentence(sent) for sent in inputs[i : i + batch_size]]
+        pred_part = [Sentence(sent) for sent in preds[i : i + batch_size]]
 
         inp_part = embedder.embed(inp_part)
         pred_part = embedder.embed(pred_part)
 
         for j in range(batch_size):
-            if ((i + j) < len(inputs)):
+            if (i + j) < len(inputs):
                 inp_sent_vec = torch.zeros(2048).cuda()
                 pred_sent_vec = torch.zeros(2048).cuda()
 
@@ -67,15 +69,19 @@ def flair_sim(args, inputs, preds):
 
 def wieting_sim(args, inputs, preds):
     assert len(inputs) == len(preds)
-    print('Calculating similarity by Wieting subword-embedding SIM model')
+    print("Calculating similarity by Wieting subword-embedding SIM model")
 
-    sim_model = SimilarityEvaluator(args.wieting_model_path, args.wieting_tokenizer_path)
+    sim_model = SimilarityEvaluator(
+        args.wieting_model_path, args.wieting_tokenizer_path
+    )
 
     sim_scores = []
 
     for i in tqdm.tqdm(range(0, len(inputs), args.batch_size)):
         sim_scores.extend(
-            sim_model.find_similarity(inputs[i:i + args.batch_size], preds[i:i + args.batch_size])
+            sim_model.find_similarity(
+                inputs[i : i + args.batch_size], preds[i : i + args.batch_size]
+            )
         )
 
     return np.array(sim_scores)

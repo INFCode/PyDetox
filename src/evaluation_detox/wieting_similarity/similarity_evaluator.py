@@ -15,17 +15,17 @@ import sentencepiece as spm
 class SimilarityEvaluator:
     def __init__(
         self,
-        model_path='/mnt/qnap/users/babakov/similarity/sim.pt',
-        tokenizer_path='/mnt/qnap/users/babakov/similarity/sim.sp.30k.model',
+        model_path="/mnt/qnap/users/babakov/similarity/sim.pt",
+        tokenizer_path="/mnt/qnap/users/babakov/similarity/sim.sp.30k.model",
     ):
         self.model_path = model_path
         self.tokenizer_path = tokenizer_path
         self.tok = TreebankWordTokenizer()
 
         model = torch.load(self.model_path)
-        state_dict = model['state_dict']
-        vocab_words = model['vocab_words']
-        args = model['args']
+        state_dict = model["state_dict"]
+        vocab_words = model["vocab_words"]
+        args = model["args"]
         # turn off gpu
         self.model = WordAveraging(args, vocab_words)
         self.model.load_state_dict(state_dict, strict=True)
@@ -55,14 +55,18 @@ class SimilarityEvaluator:
         sim_scores = []
         for i in range(0, len(inputs), batch_size):
             sim_scores.extend(
-                self.find_similarity(inputs[i:i + batch_size], preds[i:i + batch_size])
+                self.find_similarity(
+                    inputs[i : i + batch_size], preds[i : i + batch_size]
+                )
             )
         return np.array(sim_scores)
 
     def embed_texts(self, texts, batch_size=128):
         result = []
         for i in range(0, len(texts), batch_size):
-            wx, wl, wm = self.model.torchify_batch([self.make_example(x) for x in texts[i:i+batch_size]])
+            wx, wl, wm = self.model.torchify_batch(
+                [self.make_example(x) for x in texts[i : i + batch_size]]
+            )
             with torch.no_grad():
                 tensors = torch.nn.functional.normalize(self.model.encode(wx, wm, wl))
             result.append(tensors.cpu().numpy())
