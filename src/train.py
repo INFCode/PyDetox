@@ -8,9 +8,10 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     get_scheduler,
 )
-import evaluate
 from tqdm import tqdm
-from util import DEBUG
+from evaluation_detox.metric_tools.content_similarity import calc_bleu
+from metric import joint_metrics
+from util import DEBUG, find_project_root
 
 
 def set_seed(seed):
@@ -47,21 +48,20 @@ def finetune(
 
     test_tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large-cnn")
 
-    metric = evaluate.load("accuracy")
-
     detox_source = [
         "You are wrong as shit!",
         "I don't even want to give it a fuck",
         "Why do they keep fucking things up",
         "Nobody likes your idiot idea!",
-        "Don't pretend as if you've got a brain",
+        "Have a nice day!",
     ]
 
     text_inputs = test_tokenizer(
         detox_source, truncation=True, padding=True, return_tensors="pt"
     ).to(device=cfg.device)
 
-    print(text_inputs)
+    validation_labels = []
+    validation_preds = []
 
     epochs = cfg.num_epochs
     for epoch in range(epochs):
@@ -90,23 +90,40 @@ def finetune(
             text_inputs["input_ids"], num_beams=4, min_length=0, max_length=100
         )
         detox_result = test_tokenizer.batch_decode(
-            detox_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            detox_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
-        tqdm.write(f"Toxic: {detox_source}")
-        tqdm.write(f"Detox: {detox_result}")
         for toxic, detox in zip(detox_source, detox_result):
             tqdm.write(f"Toxic: {toxic}")
             tqdm.write(f"Detox: {detox}")
             tqdm.write("")
-    # for batch in eval_loader:
-    #    with torch.no_grad():
-    #        outputs = model(**batch)
-    #    logits = outputs.logits
-    #    predictions = torch.argmax(logits, dim=-1)
-    #    metric.add_batch(predictions=predictions, references=batch["labels"])
-    # accuracy = metric.compute()
-    # tqdm.write(f"Epoch {epoch+1}/{epochs}: Accuracy: {accuracy:.4f}")
+
+        all_label = []
+        all_pred = []
+        for batch in tqdm(eval_loader):
+            input_ids = batch["input_ids"]
+            label_ids = batch["labels"]
+            output_ids = model.generate(
+                input_ids, num_beams=4, min_length=0, max_length=100
+            )
+            labels = test_tokenizer.batch_decode(
+                label_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )
+            outputs = test_tokenizer.batch_decode(
+                output_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )
+            all_label.extend(labels)
+            all_pred.extend(outputs)
+        validation_labels.append(all_label)
+        validation_preds.append(all_pred)
+
+        bleu = calc_bleu(all_label, all_pred)
+        tqdm.write(f"Epoch {epoch+1}/{epochs}: BLEU: {bleu:.4f}")
     # = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = #
+    for i, (labels, preds) in enumerate(zip(validation_labels, validation_preds)):
+        joint_metrics(preds, labels, model_name=f"epoch {i}")
+
+    checkpoint_path = find_project_root() / "outputs" / "checkpoints"
+    model.save_pretrained(checkpoint_path)
 
     return model
 
@@ -115,7 +132,7 @@ if __name__ == "__main__":
     from dataloader import DataLoaderConfig, paradetox_dataloader
 
     cfg = FinetuneConfig(
-        model_name="facebook/bart-large", num_epochs=4, lr=0.0001, scheduler="linear"
+        model_name="facebook/bart-large", num_epochs=3, lr=0.0001, scheduler="linear"
     )
     dl_cfg = DataLoaderConfig(batch_size=16, tokenizer_source="facebook/bart-large")
     loaders = paradetox_dataloader(dl_cfg)

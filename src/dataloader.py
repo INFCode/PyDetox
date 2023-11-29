@@ -75,7 +75,7 @@ class DataLoaderConfig:
         validation: Optional[Dataset] = None,
     ) -> DatasetDict:
         if test is None:
-            train_vs_test_val = self.train_weight / (
+            train_vs_test_val = 1 - self.train_weight / (
                 self.train_weight + self.test_weight + self.validation_weight
             )
             train_test = train.train_test_split(test_size=train_vs_test_val)
@@ -86,14 +86,16 @@ class DataLoaderConfig:
             test_validation = test.train_test_split(test_size=test_vs_val)
             test = test_validation["test"]
             validation = test_validation["train"]
+        dataset_dict = {
+            "train": train,
+            "validation": validation,
+            "test": test,
+        }
 
-        splitted_dataset = DatasetDict(
-            {
-                "train": train,
-                "validation": validation,
-                "test": test,
-            }
-        )
+        for k, v in dataset_dict.items():
+            print(f"Size of {k} : {len(v)}")
+
+        splitted_dataset = DatasetDict(dataset_dict)
         return splitted_dataset
 
     def get_tokenizer(self):
@@ -236,7 +238,6 @@ def jigsaw_dataloader(cfg: DataLoaderConfig) -> DataLoaderGroup:
     path = cfg.path or relative_to_project_root("data/jigsaw")
     dataset = load_dataset("jigsaw_toxicity_pred", data_dir=str(path))
     assert isinstance(dataset, DatasetDict)
-    print(dataset.keys())
 
     def tokenize_function(examples: Dict[str, List]):
         # Repeat each first sentence four times to go with the four possibilities of second sentences.

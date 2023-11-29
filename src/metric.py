@@ -61,7 +61,7 @@ def fluency(preds: List[str]):
     return tokenwise_ppl, cola_by_sent, avg_cola
 
 
-def similarity(preds: List[str], inputs: List[str]):
+def similarity(inputs: List[str], preds: List[str]):
     bleu = calc_bleu(inputs, preds)
     emb_sim = flair_sim(args, inputs, preds).mean()
     similarity_by_sent = wieting_sim(args, inputs, preds)
@@ -70,16 +70,21 @@ def similarity(preds: List[str], inputs: List[str]):
 
 
 def joint_metrics(
-    preds: List[str], inputs: List[str], save: bool = True, model_name="TEST"
+    inputs: List[str], preds: List[str], save: bool = True, model_name="TEST"
 ):
+    cleanup()
+
     accuracy_by_sent, avg_accuracy = transfer_accuracy(preds)
+    print(f"Accuracy {accuracy_by_sent}")
     cleanup()
 
     # charwise_ppl, tokenwise_ppl, cola_by_sent, avg_cola = fluency(preds)
     tokenwise_ppl, cola_by_sent, avg_cola = fluency(preds)
+    print(f"Fluency {cola_by_sent}")
     cleanup()
 
-    bleu, emb_sim, similarity_by_sent, avg_similarity = similarity(preds, inputs)
+    bleu, emb_sim, similarity_by_sent, avg_similarity = similarity(inputs, preds)
+    print(f"Similarity {similarity_by_sent}")
     cleanup()
 
     # gm = get_gm(args, avg_accuracy, emb_sim, charwise_ppl)
@@ -114,4 +119,4 @@ if __name__ == "__main__":
         "Your fucking idea is pure shit",
         "Your fucking idea is pure shit",
     ]
-    joint_metrics(preds, inputs)
+    joint_metrics(inputs, preds)
