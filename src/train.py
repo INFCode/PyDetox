@@ -128,6 +128,23 @@ def finetune(
     return model
 
 
+@dataclass
+class StyleTransferConfig:
+    model_name: str
+    num_epochs: int
+    lr: float
+    scheduler: str
+    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def style_transfer(
+    cfg: StyleTransferConfig,
+    train_loader: DataLoader,
+    eval_loader: DataLoader,
+):
+    pass
+
+
 if __name__ == "__main__":
     from dataloader import DataLoaderConfig, paradetox_dataloader
 
